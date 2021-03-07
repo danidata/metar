@@ -1,7 +1,10 @@
+# -*- coding: UTF-8 -*-
 #
 # Copyright (c) 2017-2018  Daniel Macías Perea <dani.macias.perea@gmail.com>
 #
 # Distributed under the terms of the GNU GENERAL PUBLIC LICENSE
+#
+# Modified by Michael Bruski (AJ9X) to run under Python3 for WeeWx v4
 #
 """Extends the Cheetah generator search list to add metar data tables.
 To use it, add this generator to search_list_extensions in skin.conf:
@@ -29,7 +32,6 @@ from datetime import datetime
 import time
 import os.path
 import weeutil.weeutil
-import urllib
 import syslog
 
 class MyMetarSearch(SearchList):
@@ -40,7 +42,7 @@ class MyMetarSearch(SearchList):
         
         self.refresh_interval = int(self.metar_dict.get('refresh_interval', 5))
         self.cache_time = 0      
-    
+
         self.search_list_extension = {}        
 
     def get_extension_list(self, valid_timespan, db_lookup):
@@ -67,10 +69,10 @@ class MyMetarSearch(SearchList):
                     self.search_list_extension[metar_name] = self.statsHTMLTable(airport)
                     ngen += 1
                 except:
-                    syslog.syslog(syslog.LOG_INFO, "%s: error: Cannot get Metar Report. Recovering the last file saved." % os.path.basename(__file__))                                    
+                    syslog.syslog(syslog.LOG_INFO, "%s: error: Cannot get Metar Report (%s). Recovering the last file saved." % (os.path.basename(__file__), metar_name))                                    
                     # try to get last metar file saved
                     try:
-                        with open(destination_dir + airport + ".metar", 'r') as f:
+                        with open("/tmp/" + airport + ".metar", 'r') as f:
                             self.search_list_extension[metar_name] = f.read()
                     except:
                         syslog.syslog(syslog.LOG_INFO, "%s: error: There could not be found an older Metar Report. Skipping!" % os.path.basename(__file__))
@@ -88,20 +90,40 @@ class MyMetarSearch(SearchList):
         airport: ICAO Code of Airport to generate metar
         """
         url = "https://www.aviationweather.gov/adds/metars?station_ids=%s+&std_trans=translated&chk_metars=on&hoursStr=most+recent+only&chk_tafs=on&submitmet=Get+Weather" % (airport)
-        f = urllib.urlopen(url)
-        myfile = f.read()
-        lines = myfile.split("<TR VALIGN=")
-        
+        syslog.syslog(syslog.LOG_INFO, "%s: request URL - %s" % (os.path.basename(__file__), url))
+
+        import random
+        import requests
+        attempts = 0
+        success  = False
+        while attempts < 3 and not success:
+            try:
+                rq = requests.get(url, timeout=5.0)
+                rq.raise_for_status()
+                if rq.status_code == requests.codes.ok:
+                    myfile = rq.text
+                    lines = myfile.split("<TR VALIGN=")
+                    syslog.syslog(syslog.LOG_INFO, "%s: request succeeded" % os.path.basename(__file__))
+                    success = True
+            except:
+                attempts = attempts + 1
+                time.sleep(random.uniform(3,60))
+
+        if attempts == 3:
+            syslog.syslog(syslog.LOG_INFO, "%s: request failed" % os.path.basename(__FILE__))
+
         # Obtain the new METAR information and replace the airport file
-        if lines[0].find("Output produced by METARs form") != -1:
+        if myfile.find("Output produced by METARs form") != -1:
             htmlText = "<TABLE style=\"border-spacing: 5px;border-collapse: inherit;line-height: 1.3;\">"
             
             for i in range(len(lines)):
                 if i > 1:
                     htmlText += "<TR VALIGN=%s" % lines[i]
-            
-            with open(destination_dir + airport + ".metar", 'w') as f:
-                f.write(htmlText)
-        
-        return htmlText
 
+            mhtml = "/tmp/" + airport + ".metar"
+            with open(mhtml, 'w') as f:
+                f.write(htmlText)
+                syslog.syslog(syslog.LOG_INFO, "%s: modified HTML written to %s" % (os.path.basename(__file__), mhtml))
+
+        ##syslog.syslog(syslog.LOG_INFO, "%s: return - %s" % (os.path.basename(__file__), htmlText))
+        return htmlText
